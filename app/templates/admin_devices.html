@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Devices – bf-central{% endblock %}
+{% block content %}
+<h1>Devices</h1>
+<div class="card" style="padding:0;overflow:hidden;">
+  <table>
+    <thead>
+      <tr>
+        <th>MAC Address</th>
+        <th>Device Name</th>
+        <th>User</th>
+        <th>Status</th>
+        <th>Location</th>
+        <th>Registered</th>
+        <th>Last Seen</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for device in devices %}
+      <tr>
+        <td class="mono">{{ device.mac_address }}</td>
+        <td>{{ device.device_name or '—' }}</td>
+        <td>{% if device.user %}{{ device.user.email }}{% else %}<span class="text-muted">unlinked</span>{% endif %}</td>
+        <td>
+          {% if device.registration_status == 'registered' %}
+            <span class="badge badge-green">registered</span>
+          {% else %}
+            <span class="badge badge-gray">{{ device.registration_status }}</span>
+          {% endif %}
+        </td>
+        <td>{{ device.registered_at_location or '—' }}</td>
+        <td>{{ device.registered_at.strftime('%Y-%m-%d') if device.registered_at else '—' }}</td>
+        <td>{{ device.last_seen.strftime('%Y-%m-%d %H:%M') if device.last_seen else '—' }}</td>
+        <td>
+          <form method="post" action="{{ url_for('admin_delete_device', device_id=device.id) }}" style="display:inline"
+                onsubmit="return confirm('Delete device {{ device.mac_address }}?')">
+            <button class="btn btn-danger" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" style="text-align:center;color:#6b7280;padding:2rem;">No devices yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}bf-central{% endblock %}</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #222; }
+        nav { background: #1a1a2e; color: #fff; padding: 0 1.5rem; display: flex; align-items: center; height: 52px; gap: 1.5rem; }
+        nav .brand { font-weight: 700; font-size: 1.1rem; color: #7ec8e3; text-decoration: none; }
+        nav a { color: #ccc; text-decoration: none; font-size: .9rem; }
+        nav a:hover { color: #fff; }
+        nav .spacer { flex: 1; }
+        .container { max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+        h1 { font-size: 1.6rem; margin-bottom: 1.2rem; color: #1a1a2e; }
+        h2 { font-size: 1.2rem; margin-bottom: .8rem; }
+        .card { background: #fff; border-radius: 8px; padding: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 1.5rem; }
+        .btn { display: inline-block; padding: .5rem 1.1rem; border-radius: 5px; border: none; cursor: pointer; font-size: .9rem; text-decoration: none; }
+        .btn-primary { background: #2563eb; color: #fff; }
+        .btn-primary:hover { background: #1d4ed8; }
+        .btn-danger { background: #dc2626; color: #fff; }
+        .btn-danger:hover { background: #b91c1c; }
+        .btn-secondary { background: #6b7280; color: #fff; }
+        .btn-secondary:hover { background: #4b5563; }
+        table { width: 100%; border-collapse: collapse; font-size: .9rem; }
+        th, td { padding: .6rem .8rem; text-align: left; border-bottom: 1px solid #e5e7eb; }
+        th { background: #f9fafb; font-weight: 600; color: #374151; }
+        tr:hover td { background: #f9fafb; }
+        .badge { display: inline-block; padding: .2rem .55rem; border-radius: 12px; font-size: .78rem; font-weight: 600; }
+        .badge-green { background: #dcfce7; color: #16a34a; }
+        .badge-red { background: #fee2e2; color: #dc2626; }
+        .badge-gray { background: #f3f4f6; color: #6b7280; }
+        .alert { padding: .8rem 1rem; border-radius: 6px; margin-bottom: 1rem; font-size: .9rem; }
+        .alert-success { background: #dcfce7; color: #166534; border: 1px solid #bbf7d0; }
+        .alert-error { background: #fee2e2; color: #991b1b; border: 1px solid #fecaca; }
+        .form-group { margin-bottom: 1rem; }
+        label { display: block; margin-bottom: .3rem; font-weight: 500; font-size: .9rem; }
+        input[type=text], input[type=email], input[type=password], input[type=date], textarea, select {
+            width: 100%; padding: .5rem .7rem; border: 1px solid #d1d5db; border-radius: 5px; font-size: .9rem; }
+        input:focus, textarea:focus, select:focus { outline: none; border-color: #2563eb; }
+        textarea { min-height: 80px; resize: vertical; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+        .stat-card { background: #fff; border-radius: 8px; padding: 1.2rem 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+        .stat-card .number { font-size: 2rem; font-weight: 700; color: #2563eb; }
+        .stat-card .label { font-size: .85rem; color: #6b7280; margin-top: .2rem; }
+        .mono { font-family: monospace; font-size: .88rem; }
+        .text-muted { color: #6b7280; }
+        .mt-1 { margin-top: .5rem; }
+        .key-box { background: #1e293b; color: #7ec8e3; padding: .8rem 1rem; border-radius: 6px; font-family: monospace; word-break: break-all; margin: .5rem 0; }
+    </style>
+</head>
+<body>
+{% if session.get('admin_id') %}
+<nav>
+    <a class="brand" href="{{ url_for('admin_dashboard') }}">bf-central</a>
+    <a href="{{ url_for('admin_users') }}">Users</a>
+    <a href="{{ url_for('admin_devices') }}">Devices</a>
+    <a href="{{ url_for('admin_api_keys') }}">API Keys</a>
+    <span class="spacer"></span>
+    <a href="{{ url_for('admin_logout') }}">Logout</a>
+</nav>
+{% endif %}
+<div class="container">
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}
+        <div class="alert alert-{{ 'success' if category == 'success' else 'error' }}">{{ message }}</div>
+      {% endfor %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+</div>
+</body>
+</html>

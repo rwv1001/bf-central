@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Edit User – bf-central{% endblock %}
+{% block content %}
+<h1>Edit User – {{ user.email }}</h1>
+<div class="card" style="max-width:600px;">
+  {% if error %}
+    <div class="alert alert-error">{{ error }}</div>
+  {% endif %}
+  <form method="post">
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div class="form-group">
+        <label for="first_name">First name</label>
+        <input type="text" id="first_name" name="first_name" value="{{ user.first_name or '' }}">
+      </div>
+      <div class="form-group">
+        <label for="last_name">Last name</label>
+        <input type="text" id="last_name" name="last_name" value="{{ user.last_name or '' }}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="phone_number">Phone number</label>
+      <input type="text" id="phone_number" name="phone_number" value="{{ user.phone_number or '' }}">
+    </div>
+    <div class="form-group">
+      <label for="allowed_vlans">Allowed VLANs <span class="text-muted">(comma-separated)</span></label>
+      <input type="text" id="allowed_vlans" name="allowed_vlans" value="{{ user.allowed_vlans or '' }}">
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:1rem;">
+      <div class="form-group">
+        <label for="begin_date">Valid from</label>
+        <input type="date" id="begin_date" name="begin_date" value="{{ user.begin_date }}">
+      </div>
+      <div class="form-group">
+        <label for="expiry_date">Expires <span class="text-muted">(blank = no expiry)</span></label>
+        <input type="date" id="expiry_date" name="expiry_date" value="{{ user.expiry_date or '' }}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>
+        <input type="checkbox" name="blocked" {% if user.blocked %}checked{% endif %}>
+        Block this user
+      </label>
+    </div>
+    <div class="form-group">
+      <label for="notes">Notes</label>
+      <textarea id="notes" name="notes">{{ user.notes or '' }}</textarea>
+    </div>
+    <div style="display:flex;gap:.8rem;">
+      <button type="submit" class="btn btn-primary">Save Changes</button>
+      <a class="btn btn-secondary" href="{{ url_for('admin_users') }}">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
