@@ -1,0 +1,7 @@
+# Caddyfile for bf-central
+# Caddy automatically obtains and renews an HTTPS certificate for the domain.
+# Requires ports 80 and 443 to be publicly accessible on this server.
+
+{$CENTRAL_DOMAIN} {
+    reverse_proxy central-api:5000
+}

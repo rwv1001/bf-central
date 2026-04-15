@@ -1,0 +1,58 @@
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  db:
+    image: postgres:15-alpine
+    container_name: bf-central-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME:-bf_central}
+      POSTGRES_USER: ${DB_USER:-central_user}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-central_user} -d ${DB_NAME:-bf_central}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Central API ─────────────────────────────────────────────────────────────
+  central-api:
+    build: ./central-api
+    container_name: bf-central-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://${DB_USER:-central_user}:${DB_PASSWORD}@db:5432/${DB_NAME:-bf_central}
+      ADMIN_KEY: ${ADMIN_KEY:?ADMIN_KEY is required}
+      GUNICORN_WORKERS: ${GUNICORN_WORKERS:-2}
+    networks:
+      - internal
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # ── Caddy (HTTPS reverse proxy) ─────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: bf-central-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CENTRAL_DOMAIN: ${CENTRAL_DOMAIN:?CENTRAL_DOMAIN is required}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy/data:/data
+      - ./data/caddy/config:/config
+    networks:
+      - internal
+    depends_on:
+      - central-api
+
+networks:
+  internal:
+    driver: bridge
