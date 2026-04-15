@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Dashboard – bf-central{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+<div class="stats-grid">
+  <div class="stat-card">
+    <div class="number">{{ user_count }}</div>
+    <div class="label">Registered Users</div>
+  </div>
+  <div class="stat-card">
+    <div class="number">{{ device_count }}</div>
+    <div class="label">Registered Devices</div>
+  </div>
+  <div class="stat-card">
+    <div class="number">{{ api_key_count }}</div>
+    <div class="label">Active API Keys</div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Quick links</h2>
+  <p style="margin-top:.5rem;display:flex;gap:.8rem;flex-wrap:wrap;">
+    <a class="btn btn-primary" href="{{ url_for('admin_users') }}">Manage Users</a>
+    <a class="btn btn-primary" href="{{ url_for('admin_devices') }}">Manage Devices</a>
+    <a class="btn btn-primary" href="{{ url_for('admin_api_keys') }}">Manage API Keys</a>
+  </p>
+</div>
+
+<div class="card">
+  <h2>API Endpoints</h2>
+  <table>
+    <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
+    <tbody>
+      <tr><td>GET</td><td class="mono">/api/v1/users/lookup?email=&hellip;</td><td>Look up user by email</td></tr>
+      <tr><td>GET</td><td class="mono">/api/v1/devices/lookup?mac=&hellip;</td><td>Look up device by MAC</td></tr>
+      <tr><td>POST</td><td class="mono">/api/v1/users</td><td>Create or update a user</td></tr>
+      <tr><td>PUT</td><td class="mono">/api/v1/users/:id</td><td>Update a user by ID</td></tr>
+      <tr><td>POST</td><td class="mono">/api/v1/devices</td><td>Register a device</td></tr>
+      <tr><td>POST</td><td class="mono">/api/v1/devices/:mac/seen</td><td>Update device last-seen</td></tr>
+      <tr><td>GET</td><td class="mono">/health</td><td>Health check (no auth)</td></tr>
+    </tbody>
+  </table>
+  <p class="text-muted mt-1" style="font-size:.85rem;">All <code>/api/v1/</code> endpoints require an <code>X-API-Key</code> header.</p>
+</div>
+{% endblock %}

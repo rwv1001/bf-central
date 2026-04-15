@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Users – bf-central{% endblock %}
+{% block content %}
+<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:1.2rem;">
+  <h1>Users</h1>
+  <a class="btn btn-primary" href="{{ url_for('admin_add_user') }}">+ Add User</a>
+</div>
+
+<div class="card" style="padding:0;overflow:hidden;">
+  <table>
+    <thead>
+      <tr>
+        <th>Email</th>
+        <th>Name</th>
+        <th>Allowed VLANs</th>
+        <th>Valid from</th>
+        <th>Expires</th>
+        <th>Status</th>
+        <th>Devices</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for user in users %}
+      <tr>
+        <td>{{ user.email }}</td>
+        <td>{{ user.full_name or '—' }}</td>
+        <td class="mono">{{ user.allowed_vlans or '—' }}</td>
+        <td>{{ user.begin_date }}</td>
+        <td>{{ user.expiry_date or '∞' }}</td>
+        <td>
+          {% if user.blocked %}
+            <span class="badge badge-red">blocked</span>
+          {% elif user.is_active %}
+            <span class="badge badge-green">active</span>
+          {% else %}
+            <span class="badge badge-gray">inactive</span>
+          {% endif %}
+        </td>
+        <td>{{ user.devices | length }}</td>
+        <td>
+          <a class="btn btn-secondary" href="{{ url_for('admin_edit_user', user_id=user.id) }}" style="margin-right:.3rem;">Edit</a>
+          <form method="post" action="{{ url_for('admin_delete_user', user_id=user.id) }}" style="display:inline"
+                onsubmit="return confirm('Delete user {{ user.email }}?')">
+            <button class="btn btn-danger" type="submit">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="8" style="text-align:center;color:#6b7280;padding:2rem;">No users yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

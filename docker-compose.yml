@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  web:
+    build: ./app
+    container_name: bf-central-web
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      - DATABASE_URL=postgresql://bfcentral:${DB_PASSWORD:-bfcentral}@db:5432/bfcentral
+      - SECRET_KEY=${SECRET_KEY:-change-me-in-production}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-admin123}
+      - FLASK_DEBUG=${FLASK_DEBUG:-false}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "python -c 'from app import init_db; init_db()' && gunicorn --bind 0.0.0.0:8081 --workers 2 --timeout 60 app:app"
+
+  db:
+    image: postgres:15-alpine
+    container_name: bf-central-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=bfcentral
+      - POSTGRES_USER=bfcentral
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-bfcentral}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bfcentral -d bfcentral"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  db_data:
