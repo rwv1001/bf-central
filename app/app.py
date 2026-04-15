@@ -10,7 +10,6 @@ import os
 import re
 import functools
 from datetime import datetime, date
-from urllib.parse import urlparse
 
 from flask import (
     Flask, jsonify, request, render_template, redirect, url_for,
@@ -70,7 +69,10 @@ def require_admin(f):
     @functools.wraps(f)
     def decorated(*args, **kwargs):
         if not session.get('admin_id'):
-            return redirect(url_for('admin_login', next=request.path))
+            # Store the intended destination server-side (in the session) so
+            # that admin_login can redirect back without relying on user input.
+            session['login_next'] = request.path
+            return redirect(url_for('admin_login'))
         return f(*args, **kwargs)
     return decorated
 
@@ -303,14 +305,10 @@ def admin_login():
             session['admin_id'] = admin.id
             admin.last_login = datetime.utcnow()
             db.session.commit()
-            # Only allow redirects to relative paths within this application.
-            # Reject anything with a scheme or netloc to prevent open-redirect
-            # attacks via a user-supplied 'next' parameter.
-            next_path = request.args.get('next', '')
-            parsed = urlparse(next_path)
-            if next_path and not parsed.scheme and not parsed.netloc and parsed.path.startswith('/'):
-                return redirect(parsed.path)
-            return redirect(url_for('admin_dashboard'))
+            # Read the intended destination from the server-side session so
+            # that no user-supplied value is ever passed to redirect().
+            next_path = session.pop('login_next', None)
+            return redirect(next_path or url_for('admin_dashboard'))
         error = 'Invalid username or password'
 
     return render_template('admin_login.html', error=error)
