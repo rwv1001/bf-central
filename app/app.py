@@ -10,6 +10,7 @@ import os
 import re
 import functools
 from datetime import datetime, date
+from urllib.parse import urlparse
 
 from flask import (
     Flask, jsonify, request, render_template, redirect, url_for,
@@ -302,11 +303,13 @@ def admin_login():
             session['admin_id'] = admin.id
             admin.last_login = datetime.utcnow()
             db.session.commit()
-            # Only allow redirects to paths within this application to prevent
-            # open-redirect attacks via a user-supplied 'next' parameter.
+            # Only allow redirects to relative paths within this application.
+            # Reject anything with a scheme or netloc to prevent open-redirect
+            # attacks via a user-supplied 'next' parameter.
             next_path = request.args.get('next', '')
-            if next_path and next_path.startswith('/') and not next_path.startswith('//'):
-                return redirect(next_path)
+            parsed = urlparse(next_path)
+            if next_path and not parsed.scheme and not parsed.netloc and parsed.path.startswith('/'):
+                return redirect(parsed.path)
             return redirect(url_for('admin_dashboard'))
         error = 'Invalid username or password'
 

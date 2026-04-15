@@ -14,7 +14,9 @@ echo "[*] Starting services..."
 docker compose up -d --build
 
 echo "[*] Waiting for database..."
-sleep 8
+until docker compose exec db pg_isready -U bfcentral -d bfcentral -q 2>/dev/null; do
+    sleep 2
+done
 
 echo "[*] Initialising database..."
 docker compose exec web python app.py --init 2>/dev/null || true
