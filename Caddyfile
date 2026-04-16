@@ -1,7 +1,7 @@
 # Caddyfile for bf-central
-# Caddy automatically obtains and renews an HTTPS certificate for the domain.
-# Requires ports 80 and 443 to be publicly accessible on this server.
+# LAN-only deployment: serves plain HTTP on port 80.
+# Let's Encrypt cannot issue certificates for private IPs.
 
-{$CENTRAL_DOMAIN} {
+http://{$CENTRAL_DOMAIN} {
     reverse_proxy central-api:5000
 }

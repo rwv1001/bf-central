@@ -34,14 +34,13 @@ services:
       db:
         condition: service_healthy
 
-  # ── Caddy (HTTPS reverse proxy) ─────────────────────────────────────────────
+  # ── Caddy (HTTP reverse proxy, LAN-only) ────────────────────────────────────
   caddy:
     image: caddy:2-alpine
     container_name: bf-central-caddy
     restart: unless-stopped
     ports:
       - "80:80"
-      - "443:443"
     environment:
       CENTRAL_DOMAIN: ${CENTRAL_DOMAIN:?CENTRAL_DOMAIN is required}
     volumes:
