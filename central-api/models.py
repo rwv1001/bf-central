@@ -13,6 +13,7 @@ class Site(db.Model):
     display_name = db.Column(db.String(128))
     api_url = db.Column(db.String(256), nullable=False)
     api_key_hash = db.Column(db.String(256), nullable=False)
+    push_secret = db.Column(db.String(256))
     last_seen_at = db.Column(db.DateTime(timezone=True))
     active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(
@@ -30,6 +31,7 @@ class CentralUser(db.Model):
     first_name = db.Column(db.String(128))
     last_name = db.Column(db.String(128))
     phone_number = db.Column(db.String(64))
+    network_password_hash = db.Column(db.Text)
     blocked = db.Column(db.Boolean, default=False, nullable=False)
     blocked_at = db.Column(db.DateTime(timezone=True))
     blocked_reason = db.Column(db.Text)

@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
+import requests
 from flask import Flask, g, jsonify, request
 from models import (
     CentralDevice,
@@ -73,11 +74,13 @@ def receive_event():
     data = body.get("data") or {}
 
     handlers = {
-        "device_registered": _on_device_registered,
-        "device_blocked":    _on_device_blocked,
-        "device_unblocked":  _on_device_unblocked,
-        "user_blocked":      _on_user_blocked,
-        "user_unblocked":    _on_user_unblocked,
+        "device_registered":   _on_device_registered,
+        "device_blocked":      _on_device_blocked,
+        "device_unblocked":    _on_device_unblocked,
+        "device_unregistered": _on_device_unregistered,
+        "user_blocked":        _on_user_blocked,
+        "user_unblocked":      _on_user_unblocked,
+        "user_updated":        _on_user_updated,
     }
     handler = handlers.get(event_type)
     if not handler:
@@ -268,6 +271,84 @@ def _on_user_unblocked(site: Site, data: dict):
     return jsonify({"status": "ok", "queued_to": [r.site_id for r in other_regs]})
 
 
+def _on_user_updated(site: Site, data: dict):
+    """A site has updated a user's profile (name, phone, password hash, VLAN overrides).
+
+    Central updates its own record and fans the update out to all other sites
+    that hold this user.
+    """
+    email = (data.get("email") or "").lower().strip()
+    if not email:
+        return jsonify({"error": "email required"}), 400
+
+    now = datetime.now(timezone.utc)
+    user = CentralUser.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+
+    fields = ("first_name", "last_name", "phone_number", "network_password_hash",
+              "allowed_vlans_override", "allowed_vlans_deny",
+              "adoptable_vlans_override", "adoptable_vlans_deny")
+    for f in fields:
+        if f in data:
+            setattr(user, f, data[f] or None)
+    user.updated_at = now
+
+    # Fan out to all other sites that hold this user
+    other_regs = SiteUserRegistration.query.filter(
+        SiteUserRegistration.user_email == email,
+        SiteUserRegistration.site_id != site.site_id,
+    ).all()
+    for reg in other_regs:
+        _queue_to_site(reg.site_id, "update_user", data)
+
+    db.session.commit()
+    logger.info("user_updated: %s from site %s → queued to %d site(s)", email, site.site_id, len(other_regs))
+    return jsonify({"status": "ok", "queued_to": [r.site_id for r in other_regs]})
+
+
+def _on_device_unregistered(site: Site, data: dict):
+    """A site has unregistered a device (user clicked the email unregister link).
+
+    Central removes the reporting site's SiteDeviceRegistration and pushes an
+    unregister_device instruction to every other site that still holds the
+    device, so those sites also close ownership and remove Kea reservations.
+    """
+    mac = data.get("mac_address", "").lower().strip()
+    if not mac:
+        return jsonify({"error": "mac_address required"}), 400
+
+    # Find all *other* sites that hold this device before we delete the reporter's reg
+    other_regs = SiteDeviceRegistration.query.filter(
+        SiteDeviceRegistration.mac_address == mac,
+        SiteDeviceRegistration.site_id != site.site_id,
+    ).all()
+
+    # Remove this site's registration record
+    own_reg = SiteDeviceRegistration.query.filter_by(
+        site_id=site.site_id, mac_address=mac
+    ).first()
+    if own_reg:
+        db.session.delete(own_reg)
+
+    # Push unregister_device to every other site that holds the device
+    for reg in other_regs:
+        _queue_to_site(reg.site_id, "unregister_device", {"mac_address": mac})
+
+    # If no other site holds the device any more, remove the central record entirely
+    if not other_regs:
+        device = CentralDevice.query.filter_by(mac_address=mac).first()
+        if device:
+            db.session.delete(device)
+
+    db.session.commit()
+    logger.info(
+        "device_unregistered: %s from site %s → queued to %d other site(s)",
+        mac, site.site_id, len(other_regs),
+    )
+    return jsonify({"status": "ok", "queued_to": [r.site_id for r in other_regs]})
+
+
 # ── Outbound queue: site polls for pending messages ───────────────────────────
 
 @app.route("/api/v1/queue/pending", methods=["GET"])
@@ -407,30 +488,57 @@ def health():
     return jsonify({"status": "ok"})
 
 
-# ── Background worker: reset sent-but-not-acked items back to pending ─────────
+# ── Background worker: push outbound queue items to sites ────────────────────
 
-def _stale_item_reset_worker():
-    """
-    Runs in a daemon thread. Any item that was delivered to a site poll
-    but not acknowledged within 5 minutes is reset to 'pending' so it
-    will be returned on the next poll cycle.
+def _push_delivery_worker():
+    """Daemon thread: push pending outbound_queue items to each site's /api/v1/push
+    endpoint every 10 seconds.  On HTTP 200 the item is marked 'acknowledged';
+    on any failure it stays 'pending' and will be retried on the next cycle.
     """
     while True:
-        time.sleep(60)
+        time.sleep(10)
         try:
             with app.app_context():
-                cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
-                stale = OutboundQueue.query.filter(
-                    OutboundQueue.status == "sent",
-                    OutboundQueue.last_attempt_at < cutoff,
-                ).all()
-                if stale:
-                    for item in stale:
-                        item.status = "pending"
+                pending = (
+                    OutboundQueue.query
+                    .filter_by(status="pending")
+                    .order_by(OutboundQueue.created_at)
+                    .limit(100)
+                    .all()
+                )
+                for item in pending:
+                    site = Site.query.filter_by(site_id=item.site_id).first()
+                    if not site or not site.api_url:
+                        logger.warning("push: no api_url for site %s, skipping item %d", item.site_id, item.id)
+                        continue
+                    push_secret = site.push_secret or ""
+                    try:
+                        resp = requests.post(
+                            f"{site.api_url.rstrip('/')}/api/v1/push",
+                            json={"event_type": item.event_type, "data": item.payload},
+                            headers={
+                                "Content-Type": "application/json",
+                                "X-Push-Secret": push_secret,
+                            },
+                            timeout=10,
+                        )
+                        if resp.status_code == 200:
+                            item.status = "acknowledged"
+                            item.attempts += 1
+                            item.last_attempt_at = datetime.now(timezone.utc)
+                            logger.info("push: delivered %s to %s (item %d)", item.event_type, item.site_id, item.id)
+                        else:
+                            item.attempts += 1
+                            item.last_attempt_at = datetime.now(timezone.utc)
+                            logger.warning("push: %s → %s HTTP %d (item %d)", item.event_type, item.site_id, resp.status_code, item.id)
+                    except Exception as exc:
+                        item.attempts += 1
+                        item.last_attempt_at = datetime.now(timezone.utc)
+                        logger.warning("push: failed to deliver to %s (item %d): %s", item.site_id, item.id, exc)
+                if pending:
                     db.session.commit()
-                    logger.info("Reset %d stale queue item(s) to pending", len(stale))
         except Exception as exc:
-            logger.error("Stale queue reset error: %s", exc)
+            logger.error("push delivery worker error: %s", exc)
 
 
 # ── Startup ───────────────────────────────────────────────────────────────────
@@ -439,4 +547,4 @@ with app.app_context():
     db.create_all()
     logger.info("Database tables verified/created")
 
-threading.Thread(target=_stale_item_reset_worker, daemon=True, name="stale-reset").start()
+threading.Thread(target=_push_delivery_worker, daemon=True, name="push-delivery").start()
