@@ -89,6 +89,7 @@ def receive_event():
 
 
 def _on_device_registered(site: Site, data: dict):
+    from sqlalchemy.exc import IntegrityError
     mac = data.get("mac_address", "").lower().strip()
     email = (data.get("email") or "").lower().strip()
     if not mac or not email:
@@ -96,38 +97,51 @@ def _on_device_registered(site: Site, data: dict):
 
     now = datetime.now(timezone.utc)
 
-    # Upsert user
-    user = CentralUser.query.filter_by(email=email).first()
-    if not user:
-        user = CentralUser(
-            email=email,
-            first_name=data.get("first_name"),
-            last_name=data.get("last_name"),
-            phone_number=data.get("phone_number"),
-            source_site_id=site.site_id,
-        )
-        db.session.add(user)
-    else:
-        # Fill in name fields if previously unknown
-        if data.get("first_name") and not user.first_name:
-            user.first_name = data["first_name"]
-        if data.get("last_name") and not user.last_name:
-            user.last_name = data["last_name"]
-        user.updated_at = now
+    with db.session.no_autoflush:
+        # Upsert user — flush immediately so autoflush doesn't fire mid-query
+        user = CentralUser.query.filter_by(email=email).first()
+        if not user:
+            user = CentralUser(
+                email=email,
+                first_name=data.get("first_name"),
+                last_name=data.get("last_name"),
+                phone_number=data.get("phone_number"),
+                source_site_id=site.site_id,
+            )
+            db.session.add(user)
+        else:
+            # Fill in name fields if previously unknown
+            if data.get("first_name") and not user.first_name:
+                user.first_name = data["first_name"]
+            if data.get("last_name") and not user.last_name:
+                user.last_name = data["last_name"]
+            user.updated_at = now
 
-    # Upsert device
-    device = CentralDevice.query.filter_by(mac_address=mac).first()
-    if not device:
-        device = CentralDevice(
-            mac_address=mac,
-            user_email=email,
-            assigned_vlan=data.get("assigned_vlan"),
-            device_name=data.get("device_name"),
-            source_site_id=site.site_id,
-        )
-        db.session.add(device)
-    else:
-        device.updated_at = now
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            user = CentralUser.query.filter_by(email=email).first()
+
+        # Upsert device
+        device = CentralDevice.query.filter_by(mac_address=mac).first()
+        if not device:
+            device = CentralDevice(
+                mac_address=mac,
+                user_email=email,
+                assigned_vlan=data.get("assigned_vlan"),
+                device_name=data.get("device_name"),
+                source_site_id=site.site_id,
+            )
+            db.session.add(device)
+        else:
+            device.updated_at = now
+
+        try:
+            db.session.flush()
+        except IntegrityError:
+            db.session.rollback()
+            device = CentralDevice.query.filter_by(mac_address=mac).first()
 
     # Record this site holds the device and user
     if not SiteDeviceRegistration.query.filter_by(site_id=site.site_id, mac_address=mac).first():
