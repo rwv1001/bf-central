@@ -131,10 +131,13 @@ def _on_device_registered(site: Site, data: dict):
                 user_email=email,
                 assigned_vlan=data.get("assigned_vlan"),
                 device_name=data.get("device_name"),
+                is_wired=bool(data.get("is_wired")),
                 source_site_id=site.site_id,
             )
             db.session.add(device)
         else:
+            if data.get("is_wired") is not None:
+                device.is_wired = bool(data["is_wired"])
             device.updated_at = now
 
         try:
@@ -447,6 +450,7 @@ def get_device(mac_address):
         "phone_number": user.phone_number if user else None,
         "assigned_vlan": device.assigned_vlan,
         "device_name": device.device_name,
+        "is_wired": bool(device.is_wired),
         "device_blocked": bool(device.internet_blocked),
         "device_blocked_reason": device.blocked_reason if device.internet_blocked else None,
         "user_blocked": bool(user.blocked) if user else False,

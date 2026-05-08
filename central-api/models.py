@@ -59,6 +59,7 @@ class CentralDevice(db.Model):
     internet_blocked = db.Column(db.Boolean, default=False, nullable=False)
     blocked_at = db.Column(db.DateTime(timezone=True))
     blocked_reason = db.Column(db.Text)
+    is_wired = db.Column(db.Boolean, default=False, nullable=False)
     source_site_id = db.Column(db.String(64))
     created_at = db.Column(
         db.DateTime(timezone=True),
