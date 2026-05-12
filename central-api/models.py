@@ -60,6 +60,8 @@ class CentralDevice(db.Model):
     blocked_at = db.Column(db.DateTime(timezone=True))
     blocked_reason = db.Column(db.Text)
     is_wired = db.Column(db.Boolean, default=False, nullable=False)
+    connection_type = db.Column(db.String(32))
+    ssid = db.Column(db.String(100))
     source_site_id = db.Column(db.String(64))
     created_at = db.Column(
         db.DateTime(timezone=True),

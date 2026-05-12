@@ -9,3 +9,7 @@ ALTER TABLE central_users ADD COLUMN IF NOT EXISTS network_password_hash TEXT;
 
 -- v2 → v3: is_wired on central_devices
 ALTER TABLE central_devices ADD COLUMN IF NOT EXISTS is_wired BOOLEAN NOT NULL DEFAULT FALSE;
+
+-- v3 → v4: connection_type and ssid on central_devices
+ALTER TABLE central_devices ADD COLUMN IF NOT EXISTS connection_type VARCHAR(32);
+ALTER TABLE central_devices ADD COLUMN IF NOT EXISTS ssid VARCHAR(100);
