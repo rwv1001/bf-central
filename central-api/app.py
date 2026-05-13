@@ -476,6 +476,36 @@ def get_device(mac_address):
 
 # ── Admin: register a new site ────────────────────────────────────────────────
 
+@app.route("/api/v1/user/<path:email>", methods=["GET"])
+@require_site_key
+def get_user(email):
+    """
+    Look up a user by email address.
+    Returns first_name, last_name, phone_number if known.
+    Used by sites during the step-1 registration check to pre-fill name fields
+    for a user who registered at a different site.
+    """
+    email = email.lower().strip()
+    user = CentralUser.query.filter_by(email=email).first()
+    if not user:
+        return jsonify({"error": "Not found"}), 404
+
+    # Record that this site is associated with this user (for future fan-out)
+    if not SiteUserRegistration.query.filter_by(site_id=g.site.site_id, user_email=user.email).first():
+        db.session.add(SiteUserRegistration(site_id=g.site.site_id, user_email=user.email))
+        db.session.commit()
+
+    return jsonify({
+        "email": user.email,
+        "first_name": user.first_name or "",
+        "last_name": user.last_name or "",
+        "phone_number": user.phone_number or "",
+        "blocked": bool(user.blocked),
+    })
+
+
+# ── Admin: register a new site ────────────────────────────────────────────────
+
 @app.route("/api/v1/admin/site", methods=["POST"])
 def register_site():
     """

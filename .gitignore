@@ -1,0 +1,10 @@
+# Docker data volumes - never commit these
+data/postgres/
+data/caddy/
+
+# Or be more general:
+data/
+
+# Optional: also ignore other common temp dirs
+*.log
+.env
