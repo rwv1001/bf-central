@@ -501,6 +501,7 @@ def get_user(email):
         "last_name": user.last_name or "",
         "phone_number": user.phone_number or "",
         "blocked": bool(user.blocked),
+        "network_password_hash": user.network_password_hash or "",
     })
 
 

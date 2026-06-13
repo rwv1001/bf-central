@@ -8,3 +8,4 @@ data/
 # Optional: also ignore other common temp dirs
 *.log
 .env
+.env
