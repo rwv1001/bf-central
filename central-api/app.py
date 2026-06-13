@@ -471,6 +471,7 @@ def get_device(mac_address):
         "device_blocked_reason": device.blocked_reason if device.internet_blocked else None,
         "user_blocked": bool(user.blocked) if user else False,
         "user_blocked_reason": user.blocked_reason if user and user.blocked else None,
+        "network_password_hash": user.network_password_hash or "",
     })
 
 
