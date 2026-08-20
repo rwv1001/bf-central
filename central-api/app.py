@@ -526,26 +526,45 @@ def register_site():
 
     if not site_id or not api_url:
         return jsonify({"error": "site_id and api_url required"}), 400
-    if Site.query.filter_by(site_id=site_id).first():
-        return jsonify({"error": f"Site {site_id!r} already exists"}), 409
 
+    # Re-register is allowed: a rebuilt/damaged site has lost its API key.
+    # ADMIN_KEY is required, so this is an intentional rotation, not a leak.
+    existing = Site.query.filter_by(site_id=site_id).first()
     api_key = secrets.token_urlsafe(40)
-    db.session.add(Site(
-        site_id=site_id,
-        display_name=display_name,
-        api_url=api_url,
-        api_key_hash=_sha256(api_key),
-        active=True,
-    ))
+    reissued = existing is not None
+
+    if existing:
+        existing.display_name = display_name
+        existing.api_url = api_url
+        existing.api_key_hash = _sha256(api_key)
+        existing.active = True
+    else:
+        db.session.add(Site(
+            site_id=site_id,
+            display_name=display_name,
+            api_url=api_url,
+            api_key_hash=_sha256(api_key),
+            active=True,
+        ))
+
     db.session.commit()
+
+    if reissued:
+        logger.info("Site re-registered (API key rotated): %s (%s)", site_id, api_url)
+        return jsonify({
+            "site_id": site_id,
+            "api_key": api_key,
+            "reissued": True,
+            "note": "Site already existed; api_key was rotated. Store it as CENTRAL_API_KEY in the site .env — it will not be shown again. The previous key is now invalid.",
+        }), 200
 
     logger.info("New site registered: %s (%s)", site_id, api_url)
     return jsonify({
         "site_id": site_id,
         "api_key": api_key,
+        "reissued": False,
         "note": "Store api_key as CENTRAL_API_KEY in the site .env — it will not be shown again.",
     }), 201
-
 
 # ── Health check ──────────────────────────────────────────────────────────────
 
