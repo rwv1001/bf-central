@@ -419,32 +419,27 @@ def _on_device_unregistered(site: Site, data: dict):
     if not mac:
         return jsonify({"error": "mac_address required"}), 400
 
-    # Find all *other* sites that hold this device before we delete the reporter's reg
+    # Push to every other site that currently holds the device before we delete anything.
     other_regs = SiteDeviceRegistration.query.filter(
         SiteDeviceRegistration.mac_address == mac,
         SiteDeviceRegistration.site_id != site.site_id,
     ).all()
-
-    # Remove this site's registration record
-    own_reg = SiteDeviceRegistration.query.filter_by(
-        site_id=site.site_id, mac_address=mac
-    ).first()
-    if own_reg:
-        db.session.delete(own_reg)
-
-    # Push unregister_device to every other site that holds the device
     for reg in other_regs:
         _queue_to_site(reg.site_id, "unregister_device", {"mac_address": mac})
 
-    # If no other site holds the device any more, remove the central record entirely
-    if not other_regs:
-        device = CentralDevice.query.filter_by(mac_address=mac).first()
-        if device:
-            db.session.delete(device)
+    # Remove ALL SiteDeviceRegistration entries for this device (reporting site and any
+    # other sites that received the push — they will never send device_unregistered back,
+    # so their entries would otherwise remain as permanent ghosts in central's DB).
+    SiteDeviceRegistration.query.filter_by(mac_address=mac).delete()
+
+    # Always delete the central device record.
+    device = CentralDevice.query.filter_by(mac_address=mac).first()
+    if device:
+        db.session.delete(device)
 
     db.session.commit()
     logger.info(
-        "device_unregistered: %s from site %s → queued to %d other site(s)",
+        "device_unregistered: %s from site %s → queued to %d other site(s), all regs purged",
         mac, site.site_id, len(other_regs),
     )
     return jsonify({"status": "ok", "queued_to": [r.site_id for r in other_regs]})
