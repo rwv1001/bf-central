@@ -83,6 +83,7 @@ def receive_event():
 
     handlers = {
         "device_registered":   _on_device_registered,
+        "device_reassigned":   _on_device_reassigned,
         "device_blocked":      _on_device_blocked,
         "device_unblocked":    _on_device_unblocked,
         "device_unregistered": _on_device_unregistered,
@@ -114,6 +115,7 @@ def _on_device_registered(site: Site, data: dict):
                 first_name=data.get("first_name"),
                 last_name=data.get("last_name"),
                 phone_number=data.get("phone_number"),
+                network_password_hash=data.get("network_password_hash") or None,
                 source_site_id=site.site_id,
             )
             db.session.add(user)
@@ -123,6 +125,8 @@ def _on_device_registered(site: Site, data: dict):
                 user.first_name = data["first_name"]
             if data.get("last_name") and not user.last_name:
                 user.last_name = data["last_name"]
+            if data.get("network_password_hash") and not user.network_password_hash:
+                user.network_password_hash = data["network_password_hash"]
             user.updated_at = now
 
         try:
@@ -177,6 +181,72 @@ def _on_device_registered(site: Site, data: dict):
         "user_blocked": bool(user.blocked),
         "user_blocked_reason": user.blocked_reason if user.blocked else None,
     })
+
+
+def _on_device_reassigned(site: Site, data: dict):
+    mac       = data.get("mac_address", "").lower().strip()
+    new_email = (data.get("email") or "").lower().strip()
+    old_email = (data.get("old_email") or "").lower().strip()
+    if not mac or not new_email:
+        return jsonify({"error": "mac_address and email required"}), 400
+
+    now = datetime.now(timezone.utc)
+
+    # Update the central device owner
+    device = CentralDevice.query.filter_by(mac_address=mac).first()
+    if device:
+        device.user_email = new_email
+        device.updated_at = now
+
+    # Ensure new user exists centrally
+    new_user = CentralUser.query.filter_by(email=new_email).first()
+    if not new_user:
+        new_user = CentralUser(
+            email=new_email,
+            first_name=data.get("first_name"),
+            last_name=data.get("last_name"),
+            phone_number=data.get("phone_number"),
+            source_site_id=site.site_id,
+        )
+        db.session.add(new_user)
+
+    # Add SiteUserRegistration for new owner; drop old owner's reg at this site
+    # if they have no remaining devices here.
+    if old_email and old_email != new_email:
+        old_user_other_count = (
+            db.session.query(CentralDevice)
+            .join(SiteDeviceRegistration,
+                  CentralDevice.mac_address == SiteDeviceRegistration.mac_address)
+            .filter(
+                SiteDeviceRegistration.site_id == site.site_id,
+                CentralDevice.user_email == old_email,
+                CentralDevice.mac_address != mac,
+            ).count()
+        )
+        if old_user_other_count == 0:
+            old_user_reg = SiteUserRegistration.query.filter_by(
+                site_id=site.site_id, user_email=old_email
+            ).first()
+            if old_user_reg:
+                db.session.delete(old_user_reg)
+
+    if not SiteUserRegistration.query.filter_by(site_id=site.site_id, user_email=new_email).first():
+        db.session.add(SiteUserRegistration(site_id=site.site_id, user_email=new_email))
+
+    # Fan out to all other sites that hold this device
+    other_regs = SiteDeviceRegistration.query.filter(
+        SiteDeviceRegistration.mac_address == mac,
+        SiteDeviceRegistration.site_id != site.site_id,
+    ).all()
+    for reg in other_regs:
+        _queue_to_site(reg.site_id, "reassign_device", data)
+
+    db.session.commit()
+    logger.info(
+        "device_reassigned: %s from site %s (%s → %s) → queued to %d site(s)",
+        mac, site.site_id, old_email, new_email, len(other_regs),
+    )
+    return jsonify({"status": "ok", "queued_to": [r.site_id for r in other_regs]})
 
 
 def _on_device_blocked(site: Site, data: dict):
