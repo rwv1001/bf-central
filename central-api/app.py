@@ -43,6 +43,40 @@ def _queue_to_site(site_id: str, event_type: str, payload: dict) -> None:
     db.session.add(OutboundQueue(site_id=site_id, event_type=event_type, payload=payload))
 
 
+def _device_sync_payload(device: "CentralDevice", user: "CentralUser") -> dict:
+    """Full user+device payload in the same shape as GET /api/v1/device."""
+    return {
+        "mac_address": device.mac_address,
+        "email": device.user_email,
+        "first_name": user.first_name if user else None,
+        "last_name": user.last_name if user else None,
+        "phone_number": user.phone_number if user else None,
+        "assigned_vlan": device.assigned_vlan,
+        "device_name": device.device_name,
+        "is_wired": bool(device.is_wired),
+        "connection_type": device.connection_type,
+        "ssid": device.ssid,
+        "device_blocked": bool(device.internet_blocked),
+        "user_blocked": bool(user.blocked) if user else False,
+        "network_password_hash": (user.network_password_hash or "") if user else "",
+        "sync_to_all_sites": bool(getattr(user, "sync_to_all_sites", False)) if user else False,
+    }
+
+
+def _fan_out_synced_device(device: "CentralDevice", user: "CentralUser", exclude_site_id: str) -> int:
+    """Queue an import_user_device push to every active site except the source.
+    Used for users flagged sync_to_all_sites so all sites hold the record
+    before the device ever connects there. Caller must commit."""
+    payload = _device_sync_payload(device, user)
+    count = 0
+    for site in Site.query.filter_by(active=True).all():
+        if site.site_id == exclude_site_id:
+            continue
+        _queue_to_site(site.site_id, "import_user_device", payload)
+        count += 1
+    return count
+
+
 # ── Auth decorator ────────────────────────────────────────────────────────────
 
 def require_site_key(f):
@@ -170,8 +204,16 @@ def _on_device_registered(site: Site, data: dict):
     if not SiteUserRegistration.query.filter_by(site_id=site.site_id, user_email=email).first():
         db.session.add(SiteUserRegistration(site_id=site.site_id, user_email=email))
 
+    # Full replication: flag the user and push the record to every other site.
+    fanned_out = 0
+    if data.get("sync_to_all_sites"):
+        if not user.sync_to_all_sites:
+            user.sync_to_all_sites = True
+        fanned_out = _fan_out_synced_device(device, user, exclude_site_id=site.site_id)
+
     db.session.commit()
-    logger.info("device_registered: %s from site %s (user=%s)", mac, site.site_id, email)
+    logger.info("device_registered: %s from site %s (user=%s, sync_fanout=%d)",
+                mac, site.site_id, email, fanned_out)
 
     # Return full current state so the site can immediately apply any blocks
     return jsonify({
@@ -393,19 +435,28 @@ def _on_user_updated(site: Site, data: dict):
     for f in fields:
         if f in data:
             setattr(user, f, data[f] or None)
+    if data.get("sync_to_all_sites"):
+        user.sync_to_all_sites = True
     user.updated_at = now
 
-    # Fan out to all other sites that hold this user
-    other_regs = SiteUserRegistration.query.filter(
-        SiteUserRegistration.user_email == email,
-        SiteUserRegistration.site_id != site.site_id,
-    ).all()
-    for reg in other_regs:
-        _queue_to_site(reg.site_id, "update_user", data)
+    data = dict(data)
+    data["sync_to_all_sites"] = bool(user.sync_to_all_sites)
+
+    if user.sync_to_all_sites:
+        # Synced users propagate to every active site, creating the user where absent.
+        targets = [s.site_id for s in Site.query.filter_by(active=True).all()
+                   if s.site_id != site.site_id]
+    else:
+        targets = [r.site_id for r in SiteUserRegistration.query.filter(
+            SiteUserRegistration.user_email == email,
+            SiteUserRegistration.site_id != site.site_id,
+        ).all()]
+    for target in targets:
+        _queue_to_site(target, "update_user", data)
 
     db.session.commit()
-    logger.info("user_updated: %s from site %s → queued to %d site(s)", email, site.site_id, len(other_regs))
-    return jsonify({"status": "ok", "queued_to": [r.site_id for r in other_regs]})
+    logger.info("user_updated: %s from site %s → queued to %d site(s)", email, site.site_id, len(targets))
+    return jsonify({"status": "ok", "queued_to": targets})
 
 
 def _on_device_unregistered(site: Site, data: dict):
@@ -570,6 +621,51 @@ def get_user(email):
         "network_password_hash": user.network_password_hash or "",
     })
 
+# ── Bootstrap: full sync for a (new) site ──────────────────────────────────
+
+@app.route("/api/v1/bootstrap", methods=["GET"])
+@require_site_key
+def bootstrap_sync():
+    """Return every sync-flagged user and their devices so a newly registered
+    site can seed its local database (and Kea reservations) in one call.
+    Also records this site as holding each returned user/device so future
+    updates and blocks fan out to it."""
+    users = CentralUser.query.filter_by(sync_to_all_sites=True).all()
+    user_payloads = []
+    device_payloads = []
+    user_by_email = {}
+    for user in users:
+        user_by_email[user.email] = user
+        user_payloads.append({
+            "email": user.email,
+            "first_name": user.first_name or "",
+            "last_name": user.last_name or "",
+            "phone_number": user.phone_number or "",
+            "blocked": bool(user.blocked),
+            "network_password_hash": user.network_password_hash or "",
+            "sync_to_all_sites": True,
+        })
+        if not SiteUserRegistration.query.filter_by(
+                site_id=g.site.site_id, user_email=user.email).first():
+            db.session.add(SiteUserRegistration(site_id=g.site.site_id, user_email=user.email))
+
+    if user_by_email:
+        devices = CentralDevice.query.filter(
+            CentralDevice.user_email.in_(list(user_by_email.keys()))
+        ).all()
+        for device in devices:
+            device_payloads.append(
+                _device_sync_payload(device, user_by_email.get(device.user_email))
+            )
+            if not SiteDeviceRegistration.query.filter_by(
+                    site_id=g.site.site_id, mac_address=device.mac_address).first():
+                db.session.add(SiteDeviceRegistration(
+                    site_id=g.site.site_id, mac_address=device.mac_address))
+
+    db.session.commit()
+    logger.info("bootstrap: site %s pulled %d user(s), %d device(s)",
+                g.site.site_id, len(user_payloads), len(device_payloads))
+    return jsonify({"users": user_payloads, "devices": device_payloads})
 
 # ── Admin: register a new site ────────────────────────────────────────────────
 

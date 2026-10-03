@@ -35,6 +35,8 @@ class CentralUser(db.Model):
     blocked = db.Column(db.Boolean, default=False, nullable=False)
     blocked_at = db.Column(db.DateTime(timezone=True))
     blocked_reason = db.Column(db.Text)
+    # Replicate this user (and their devices) to every active site.
+    sync_to_all_sites = db.Column(db.Boolean, default=False, nullable=False)
     source_site_id = db.Column(db.String(64))
     created_at = db.Column(
         db.DateTime(timezone=True),
