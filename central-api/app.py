@@ -38,11 +38,22 @@ def _sha256(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
 
 
+def _merge_payload(existing: dict, incoming: dict) -> dict:
+    """Keep a newer non-empty field. Empty strings and nulls must not wipe VLAN or type."""
+    merged = dict(existing or {})
+    for key, value in (incoming or {}).items():
+        if value is None or value == "":
+            continue
+        merged[key] = value
+    return merged
+
+
 def _queue_to_site(site_id: str, event_type: str, payload: dict) -> None:
     """Append an outbound event for a site. Caller must commit.
 
-    A pending item for the same site, event and device is not queued again.
-    This stops an echoed registration from stacking a new push on every retry.
+    A pending item for the same site, event and device is updated in place
+    rather than dropped. Dropping kept the first (often user-only) payload
+    and the later VLAN / device type never left central.
     """
     mac = (payload.get("mac_address") or "").lower()
     pending = OutboundQueue.query.filter_by(
@@ -51,6 +62,7 @@ def _queue_to_site(site_id: str, event_type: str, payload: dict) -> None:
     for item in pending:
         existing = item.payload or {}
         if mac and (existing.get("mac_address") or "").lower() == mac:
+            item.payload = _merge_payload(existing, payload)
             return
         if not mac and existing == payload:
             return
@@ -191,13 +203,19 @@ def _on_device_registered(site: Site, data: dict):
         created = device is None
         owner_changed = bool(device and device.user_email != email)
         incoming_vlan = data.get("assigned_vlan")
+        try:
+            incoming_vlan = int(incoming_vlan) if incoming_vlan not in (None, "") else None
+        except (TypeError, ValueError):
+            incoming_vlan = None
+        incoming_name = data.get("device_type") or data.get("device_name") or None
         vlan_changed = bool(device and incoming_vlan and device.assigned_vlan != incoming_vlan)
+        name_changed = bool(device and incoming_name and device.device_name != incoming_name)
         if not device:
             device = CentralDevice(
                 mac_address=mac,
                 user_email=email,
-                assigned_vlan=data.get("assigned_vlan"),
-                device_name=data.get("device_type") or data.get("device_name"),
+                assigned_vlan=incoming_vlan,
+                device_name=incoming_name,
                 is_wired=bool(data.get("is_wired")),
                 connection_type=data.get("connection_type") or None,
                 ssid=data.get("ssid") or None,
@@ -213,7 +231,6 @@ def _on_device_registered(site: Site, data: dict):
                 device.connection_type = data["connection_type"]
             if data.get("ssid"):
                 device.ssid = data["ssid"]
-            incoming_name = data.get("device_type") or data.get("device_name")
             if incoming_name:
                 device.device_name = incoming_name
             if incoming_vlan:
@@ -241,7 +258,9 @@ def _on_device_registered(site: Site, data: dict):
         user.sync_to_all_sites = True
     if data.get("from_central_import"):
         logger.info("device_registered: %s from %s ignored fan-out (central import echo)", mac, site.site_id)
-    elif data.get("sync_to_all_sites") and (created or owner_changed or vlan_changed or sync_turned_on):
+    elif data.get("sync_to_all_sites") and (
+        created or owner_changed or vlan_changed or sync_turned_on or name_changed
+    ):
         fanned_out = _fan_out_synced_device(device, user, exclude_site_id=site.site_id)
 
     db.session.commit()
@@ -634,6 +653,7 @@ def get_device(mac_address):
         "phone_number": user.phone_number if user else None,
         "assigned_vlan": device.assigned_vlan,
         "device_name": device.device_name,
+        "device_type": device.device_name,
         "is_wired": bool(device.is_wired),
         "connection_type": device.connection_type,
         "ssid": device.ssid,
