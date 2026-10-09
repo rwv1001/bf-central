@@ -39,7 +39,21 @@ def _sha256(value: str) -> str:
 
 
 def _queue_to_site(site_id: str, event_type: str, payload: dict) -> None:
-    """Append an outbound event for a site. Caller must commit."""
+    """Append an outbound event for a site. Caller must commit.
+
+    A pending item for the same site, event and device is not queued again.
+    This stops an echoed registration from stacking a new push on every retry.
+    """
+    mac = (payload.get("mac_address") or "").lower()
+    pending = OutboundQueue.query.filter_by(
+        site_id=site_id, event_type=event_type, status="pending"
+    ).all()
+    for item in pending:
+        existing = item.payload or {}
+        if mac and (existing.get("mac_address") or "").lower() == mac:
+            return
+        if not mac and existing == payload:
+            return
     db.session.add(OutboundQueue(site_id=site_id, event_type=event_type, payload=payload))
 
 
@@ -171,6 +185,8 @@ def _on_device_registered(site: Site, data: dict):
 
         # Upsert device
         device = CentralDevice.query.filter_by(mac_address=mac).first()
+        created = device is None
+        owner_changed = bool(device and device.user_email != email)
         if not device:
             device = CentralDevice(
                 mac_address=mac,
@@ -184,6 +200,8 @@ def _on_device_registered(site: Site, data: dict):
             )
             db.session.add(device)
         else:
+            if owner_changed:
+                device.user_email = email
             if data.get("is_wired") is not None:
                 device.is_wired = bool(data["is_wired"])
             if data.get("connection_type"):
@@ -204,11 +222,16 @@ def _on_device_registered(site: Site, data: dict):
     if not SiteUserRegistration.query.filter_by(site_id=site.site_id, user_email=email).first():
         db.session.add(SiteUserRegistration(site_id=site.site_id, user_email=email))
 
-    # Full replication: flag the user and push the record to every other site.
+    # Full replication only for a new device, an owner change, or the first time
+    # this user is flagged for sync. A site that received import_user_device
+    # posts device_registered back; repeating the fan-out there is the loop.
     fanned_out = 0
+    sync_turned_on = bool(data.get("sync_to_all_sites") and not user.sync_to_all_sites)
     if data.get("sync_to_all_sites"):
-        if not user.sync_to_all_sites:
-            user.sync_to_all_sites = True
+        user.sync_to_all_sites = True
+    if data.get("from_central_import"):
+        logger.info("device_registered: %s from %s ignored fan-out (central import echo)", mac, site.site_id)
+    elif data.get("sync_to_all_sites") and (created or owner_changed or sync_turned_on):
         fanned_out = _fan_out_synced_device(device, user, exclude_site_id=site.site_id)
 
     db.session.commit()
