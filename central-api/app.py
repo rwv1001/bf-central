@@ -259,7 +259,8 @@ def _on_device_registered(site: Site, data: dict):
     if data.get("from_central_import"):
         logger.info("device_registered: %s from %s ignored fan-out (central import echo)", mac, site.site_id)
     elif data.get("sync_to_all_sites") and (
-        created or owner_changed or vlan_changed or sync_turned_on or name_changed
+        created or owner_changed or vlan_changed or sync_turned_on
+        or name_changed or data.get("force_fanout")
     ):
         fanned_out = _fan_out_synced_device(device, user, exclude_site_id=site.site_id)
 
@@ -522,7 +523,10 @@ def _on_user_updated(site: Site, data: dict):
     for target in targets:
         _queue_to_site(target, "update_user", data)
 
-    if sync_turned_on:
+    if user.sync_to_all_sites:
+        # Every save with the flag on, not only the rising edge. Devices that
+        # arrived before the flag, or that this user_updated just created the
+        # user for, are pushed to the other sites.
         for device in CentralDevice.query.filter_by(user_email=email).all():
             _fan_out_synced_device(device, user, exclude_site_id=site.site_id)
 
