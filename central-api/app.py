@@ -67,6 +67,7 @@ def _device_sync_payload(device: "CentralDevice", user: "CentralUser") -> dict:
         "phone_number": user.phone_number if user else None,
         "assigned_vlan": device.assigned_vlan,
         "device_name": device.device_name,
+        "device_type": device.device_name,
         "is_wired": bool(device.is_wired),
         "connection_type": device.connection_type,
         "ssid": device.ssid,
@@ -173,8 +174,10 @@ def _on_device_registered(site: Site, data: dict):
                 user.first_name = data["first_name"]
             if data.get("last_name") and not user.last_name:
                 user.last_name = data["last_name"]
-            if data.get("network_password_hash") and not user.network_password_hash:
+            if data.get("network_password_hash"):
                 user.network_password_hash = data["network_password_hash"]
+            if data.get("phone_number") and not user.phone_number:
+                user.phone_number = data["phone_number"]
             user.updated_at = now
 
         try:
@@ -187,12 +190,14 @@ def _on_device_registered(site: Site, data: dict):
         device = CentralDevice.query.filter_by(mac_address=mac).first()
         created = device is None
         owner_changed = bool(device and device.user_email != email)
+        incoming_vlan = data.get("assigned_vlan")
+        vlan_changed = bool(device and incoming_vlan and device.assigned_vlan != incoming_vlan)
         if not device:
             device = CentralDevice(
                 mac_address=mac,
                 user_email=email,
                 assigned_vlan=data.get("assigned_vlan"),
-                device_name=data.get("device_name"),
+                device_name=data.get("device_type") or data.get("device_name"),
                 is_wired=bool(data.get("is_wired")),
                 connection_type=data.get("connection_type") or None,
                 ssid=data.get("ssid") or None,
@@ -208,6 +213,11 @@ def _on_device_registered(site: Site, data: dict):
                 device.connection_type = data["connection_type"]
             if data.get("ssid"):
                 device.ssid = data["ssid"]
+            incoming_name = data.get("device_type") or data.get("device_name")
+            if incoming_name:
+                device.device_name = incoming_name
+            if incoming_vlan:
+                device.assigned_vlan = incoming_vlan
             device.updated_at = now
 
         try:
@@ -231,7 +241,7 @@ def _on_device_registered(site: Site, data: dict):
         user.sync_to_all_sites = True
     if data.get("from_central_import"):
         logger.info("device_registered: %s from %s ignored fan-out (central import echo)", mac, site.site_id)
-    elif data.get("sync_to_all_sites") and (created or owner_changed or sync_turned_on):
+    elif data.get("sync_to_all_sites") and (created or owner_changed or vlan_changed or sync_turned_on):
         fanned_out = _fan_out_synced_device(device, user, exclude_site_id=site.site_id)
 
     db.session.commit()
@@ -449,21 +459,37 @@ def _on_user_updated(site: Site, data: dict):
 
     now = datetime.now(timezone.utc)
     user = CentralUser.query.filter_by(email=email).first()
+    created = user is None
     if not user:
-        return jsonify({"error": "User not found"}), 404
+        # Password set / profile save can arrive before device_registered.
+        # Create the user so the hash is not dropped with a 404.
+        user = CentralUser(
+            email=email,
+            first_name=data.get("first_name"),
+            last_name=data.get("last_name"),
+            phone_number=data.get("phone_number"),
+            network_password_hash=data.get("network_password_hash") or None,
+            source_site_id=site.site_id,
+        )
+        db.session.add(user)
+        db.session.flush()
 
     fields = ("first_name", "last_name", "phone_number", "network_password_hash",
               "allowed_vlans_override", "allowed_vlans_deny",
               "adoptable_vlans_override", "adoptable_vlans_deny")
     for f in fields:
-        if f in data:
-            setattr(user, f, data[f] or None)
+        if f in data and data[f]:
+            setattr(user, f, data[f])
+    sync_turned_on = bool(data.get("sync_to_all_sites") and not user.sync_to_all_sites)
     if data.get("sync_to_all_sites"):
         user.sync_to_all_sites = True
     user.updated_at = now
 
     data = dict(data)
     data["sync_to_all_sites"] = bool(user.sync_to_all_sites)
+
+    if not SiteUserRegistration.query.filter_by(site_id=site.site_id, user_email=email).first():
+        db.session.add(SiteUserRegistration(site_id=site.site_id, user_email=email))
 
     if user.sync_to_all_sites:
         # Synced users propagate to every active site, creating the user where absent.
@@ -477,9 +503,14 @@ def _on_user_updated(site: Site, data: dict):
     for target in targets:
         _queue_to_site(target, "update_user", data)
 
+    if sync_turned_on:
+        for device in CentralDevice.query.filter_by(user_email=email).all():
+            _fan_out_synced_device(device, user, exclude_site_id=site.site_id)
+
     db.session.commit()
-    logger.info("user_updated: %s from site %s → queued to %d site(s)", email, site.site_id, len(targets))
-    return jsonify({"status": "ok", "queued_to": targets})
+    logger.info("user_updated: %s from site %s created=%s → queued to %d site(s)",
+                email, site.site_id, created, len(targets))
+    return jsonify({"status": "ok", "queued_to": targets, "created": created})
 
 
 def _on_device_unregistered(site: Site, data: dict):
